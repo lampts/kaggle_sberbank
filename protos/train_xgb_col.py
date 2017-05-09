@@ -13,7 +13,7 @@ logger = getLogger(__name__)
 from tqdm import tqdm
 from features_tmp import FEATURE
 from sklearn.model_selection import TimeSeriesSplit
-
+import math
 from load_data import load_train_data2 as load_train_data
 from load_data import load_test_data2 as load_test_data
 CHUNK_SIZE = 100000
@@ -34,7 +34,7 @@ def rmsel(label, pred):
     if IS_LOG:
         label = np.exp(label) - 1
         pred = np.exp(pred) - 1
-
+    pred = np.where(pred < 0, 0, pred)
     return np.sqrt(((np.log1p(pred) - np.log1p(label))**2).mean())
 
 
@@ -42,27 +42,9 @@ def rmsel_metric(pred, dmatrix):
     label = dmatrix.get_label()
     return 'rmsel', rmsel(label, pred)
 
-if __name__ == '__main__':
-    from logging import StreamHandler, DEBUG, Formatter, FileHandler
 
-    log_fmt = Formatter('%(asctime)s %(name)s %(lineno)d [%(levelname)s][%(funcName)s] %(message)s ')
-    handler = FileHandler('train.py.log', 'w')
-    handler.setLevel(DEBUG)
-    handler.setFormatter(log_fmt)
-    logger.setLevel(DEBUG)
-    logger.addHandler(handler)
-
-    handler = StreamHandler()
-    handler.setLevel('INFO')
-    handler.setFormatter(log_fmt)
-    logger.setLevel('INFO')
-    logger.addHandler(handler)
-
-    logger.info('load start')
-
-    x_train, y_train_orig = load_train_data()
-    cols = x_train.columns.values
-
+def tune(x_train, y_train_orig, cols):
+    logger.info('{}'.format(cols))
     x_train = x_train[cols].values  # [:, FEATURE]
     if IS_LOG:
         y_train = np.log1p(y_train_orig)
@@ -85,7 +67,7 @@ if __name__ == '__main__':
     use_score = 0
     cv = np.arange(x_train.shape[0])
 
-    for params in tqdm(list(ParameterGrid(all_params))):
+    for params in list(ParameterGrid(all_params)):
         #cv = TimeSeriesSplit(n_splits=5).split(x_train)
         cnt = 0
         list_score = []
@@ -141,41 +123,45 @@ if __name__ == '__main__':
         logger.info('best_param: {}'.format(min_params))
 
     gc.collect()
+    return min_score[use_score]
+
+if __name__ == '__main__':
+    from logging import StreamHandler, DEBUG, Formatter, FileHandler
+
+    log_fmt = Formatter('%(asctime)s %(name)s %(lineno)d [%(levelname)s][%(funcName)s] %(message)s ')
+    handler = FileHandler('col_tune.log', 'w')
+    handler.setLevel(DEBUG)
+    handler.setFormatter(log_fmt)
+    logger.setLevel(DEBUG)
+    logger.addHandler(handler)
+
+    handler = StreamHandler()
+    handler.setLevel('INFO')
+    handler.setFormatter(log_fmt)
+    logger.setLevel('INFO')
+    logger.addHandler(handler)
+
+    logger.info('load start')
+
+    x_train, y_train_orig = load_train_data()
+    all_cols = x_train.columns.values.tolist()
+    # 0.41964659008313887 :: 10000
+    cols = ['full_sq', 'life_sq', 'floor', 'max_floor', 'material', 'build_year', 'kitch_sq', 'product_type', 'area_m', 'raion_popul', 'green_zone_part', 'indust_part', 'children_preschool', 'children_school', 'school_quota', 'culture_objects_top_25',
+            'ID_metro', 'park_km', 'industrial_km', 'water_treatment_km', 'ID_railroad_station_walk', 'water_1line', 'mkad_km', 'bulvar_ring_km', 'ID_big_road1', 'cafe_avg_price_500', 'cafe_count_500_price_1500', 'cafe_count_2000', 'cafe_count_3000']
+
+    # 0.40232381770340664 :: 5000
     """
-    for params in ParameterGrid(all_params):
-        min_params = params
-    dtrain = xgb.DMatrix(x_train, y_train)
-    cv_output = xgb.cv(params, dtrain, num_boost_round=1000, early_stopping_rounds=20,
-                       verbose_eval=50, show_stdv=False)
-    min_params['n_estimators'] = len(cv_output)
-    logger.info('best_param: {}'.format(min_params))
+    cols = ['full_sq', 'life_sq', 'floor', 'max_floor', 'material', 'build_year', 'kitch_sq', 'product_type', 'area_m', 'raion_popul', 'green_zone_part', 'indust_part', 'children_preschool', 'children_school', 'school_quota', 'culture_objects_top_25',
+            'ID_metro', 'park_km', 'industrial_km', 'water_treatment_km', 'ID_railroad_station_walk', 'water_1line', 'mkad_km', 'bulvar_ring_km', 'ID_big_road1', 'cafe_avg_price_500', 'cafe_count_500_price_1500', 'cafe_count_2000', 'cafe_count_3000',
+            'work_female', 'ekder_female', '0_13_female', 'raion_build_count_with_material_info', 'ttk_km']
     """
-    # x_train = np.r_[x_train, x_train_rev]
-    # y_train = np.r_[y_train, y_train]
-    # sample_weight = np.r_[sample_weight, sample_weight]
-    clf = xgb.train(min_params,
-                    dtrain,
-                    num_boost_round=min_params['n_estimators'])
-
-    with open('model.pkl', 'wb') as f:
-        pickle.dump(clf, f, -1)
-    del x_train
-    gc.collect()
-
-    with open('model.pkl', 'rb') as f:
-        clf = pickle.load(f)
-
-    x_test = xgb.DMatrix(load_test_data(cols).values)  # [:, FEATURE]
-
-    logger.info('train end')
-    preds = []
-    p_test = clf.predict(x_test)
-    if IS_LOG:
-        p_test = np.exp(p_test) - 1
-    p_test = np.where(p_test < 0, 0, p_test)
-
-    sub = pd.read_csv('../data/sample_submission.csv')
-
-    sub['price_doc'] = p_test
-    sub.to_csv('submit.csv', index=False)
-    logger.info('learn start')
+    min_score = tune(x_train, y_train_orig, cols)
+    for col in tqdm(all_cols):
+        if col in cols:
+            continue
+        score = tune(x_train, y_train_orig, cols + [col])
+        if score < min_score:
+            min_score = score
+            cols.append(col)
+        logger.info('best score: {}'.format(min_score))
+        logger.info('best feat: {}'.format(cols))
